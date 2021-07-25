@@ -6,12 +6,15 @@
 #include "ngx_func.h"  // 各种函数声明
 #include "ngx_c_conf.h"  //和配置文件处理相关的类,名字带c_表示和类有关
 #include "ngx_signal.h"
-#include "ngx_setproctitle.h"
 
 //和设置标题有关的全局量
 char **g_os_argv;            //原始命令行参数数组,在main中会被赋值
 char *gp_envmem = nullptr;      //指向自己分配的env环境变量的内存
 int  g_environlen = 0;       //环境变量所占内存大小
+
+// functions defined in other .cxx files
+extern void ngx_init_setproctitle();
+extern void ngx_setproctitle(const char *title);
 
 int main(int argc, char *const *argv)
 {
