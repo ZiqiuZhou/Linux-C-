@@ -27,13 +27,13 @@ CConfig::~CConfig() {
     m_ConfigItemList.clear();
 }
 
-FileHandle CConfig::FileReader::openFile(const char*& pconfName) {
+FileHandle FileReader::openFile(const char*& pconfName) {
     std::FILE* file = fopen(pconfName, "r");
     posixAssert(file != nullptr);
     return FileHandle(file, FileDeleter());
 }
 
-void CConfig::FileReader::closeFile(FileHandle& file) {
+void FileReader::closeFile(FileHandle& file) {
     std::FILE* rawfile = file.release();
 
     // Close the file, throw an exception on error.
@@ -41,7 +41,7 @@ void CConfig::FileReader::closeFile(FileHandle& file) {
     posixAssert(result == 0);
 }
 
-bool CConfig::FileReader::readFile(char* linebuf, std::vector<CConfItem*>& _m_ConfigItemList) {
+bool FileReader::readFile(char* linebuf, std::vector<CConfItem*>& _m_ConfigItemList) {
     //检查文件是否结束 ，没有结束则条件成立
 
     while (!std::feof(file_.get())) {

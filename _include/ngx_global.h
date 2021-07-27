@@ -19,10 +19,19 @@ struct CConfItem
 	CConfItem(){}
 };
 
+//和运行日志相关
+struct ngx_log_t{
+    int log_level = 3; //日志级别 或者日志类型，ngx_macro.h里分0-8共9个级别
+    int fd; //日志文件描述符
+};
+
 //外部全局量声明
 extern char  **g_os_argv;
 extern char  *gp_envmem; 
 extern int   g_environlen;
+
+extern pid_t       ngx_pid;
+extern ngx_log_t   ngx_log;
 
 // check a POSIX error code
 static void posixCheck(int errorCode) {
