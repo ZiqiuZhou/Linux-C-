@@ -11,7 +11,7 @@
 #include <time.h>      //localtime_r
 #include <fcntl.h>     //open
 #include <errno.h>     //errno
-#include <iostream>
+
 #include "ngx_global.h"
 #include "ngx_macro.h"
 #include "ngx_func.h"
@@ -231,19 +231,16 @@ void ngx_log_init()
     CConfig *p_config = CConfig::GetInstance();
     const char* logname = p_config->GetString("Log");
     plogname = (char*)logname;
-    std::cout << "name: " << plogname << std::endl;
+
     time_t now = time(nullptr);
     tm* curr_tm = localtime(&now);
     char time[80] = {0};
     strftime(time, 80, "%Y-%m-%d-%H-%M-%S", curr_tm);
-    std::cout << "time: " << time << std::endl;
     curr_tm = nullptr;
 
     std::string cc = std::string(plogname) + std::string(time);
-    plogname = (char *)cc.c_str();
-    cc.clear();
+    plogname = std::move((char *)cc.c_str());
 
-    std::cout << "name: " << plogname << std::endl;
     if(plogname == NULL)
     {
         //没读到，就要给个缺省的路径文件名了

@@ -10,12 +10,24 @@
 #include "ngx_func.h"     //函数声明
 #include "ngx_c_conf.h"   //和配置文件处理相关的类,名字带c_表示和类有关
 
-extern void Trim(std::string& str);
-
 constexpr std::size_t bufSize = 501;
 
 //静态成员赋值
 CConfig *CConfig::m_instance = nullptr;
+
+// check a POSIX error code
+static void posixCheck(int errorCode) {
+    if (errorCode != 0) {
+        throw std::system_error(std::error_code(errorCode, std::generic_category()));
+    }
+}
+
+// check the status code of functions that return an error code in `errno`.
+static void posixAssert(bool success) {
+    if (!success) {
+        posixCheck(errno);
+    }
+}
 
 //析构函数
 CConfig::~CConfig() {
@@ -125,7 +137,7 @@ const char *CConfig::GetString(const char *p_itemname)
     return nullptr;
 }
 //根据ItemName获取数字类型配置信息，不修改不用互斥
-int CConfig::GetIntDefault(const char *p_itemname,const int def)
+int CConfig::GetIntDefault(const char *p_itemname, const int def)
 {
     std::vector<CConfItem*>::iterator pos;
     for(pos = m_ConfigItemList.begin(); pos !=m_ConfigItemList.end(); ++pos)
