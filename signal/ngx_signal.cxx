@@ -10,7 +10,9 @@
 #include <signal.h>    //信号相关头文件
 #include <errno.h>     //errno
 #include <unistd.h>
+#include <sys/wait.h> // waitpid
 
+#include "ngx_global.h"
 #include "ngx_macro.h"
 #include "ngx_func.h"
 
@@ -23,8 +25,9 @@ struct ngx_signal_t {
     void (*handler)(int signo, siginfo_t *siginfo, void *ucontext); // //函数指针,   siginfo_t:系统定义的结构
 };
 
-//声明一个信号处理函数
+//声明信号处理函数
 static void ngx_signal_handler(int signo, siginfo_t *siginfo, void *ucontext); //static表示该函数只在当前文件内可见
+static void ngx_process_get_status(void);
 
 //数组 ，定义本系统处理的各种信号，我们取一小部分nginx中的信号，并没有全部搬移到这里，日后若有需要根据具体情况再增加
 //在实际商业代码中，你能想到的要处理的信号，都弄进来
@@ -72,16 +75,100 @@ int ngx_init_signals() {
         if ((sigaction(sig->signo, &sa, NULL) == -1)) {
             ngx_log_error_core(NGX_LOG_EMERG, errno, "sigaction(%s) failed", sig->signame); //显示到日志文件中去的
             return -1;
-        } else {
-            ngx_log_stderr(0,"sigaction(%s) succed!",sig->signame); //直接往屏幕上打印看看 ，不需要时可以去掉
         }
     }
     return 0;
 }
 
 //信号处理函数
+//siginfo：这个系统定义的结构中包含了信号产生原因的有关信息
 static void ngx_signal_handler(int signo, siginfo_t *siginfo, void *ucontext)
 {
-    printf("来信号了\n");
-    //sleep(10); //休息10秒
+    ngx_signal_t    *sig;    //自定义结构
+    char            *action; //一个字符串，用于记录一个动作字符串以往日志文件中写
+
+    for (sig = signals; sig->signo != 0; sig++) //遍历信号数组
+    {
+        //找到对应信号，即可处理
+        if (sig->signo == signo)
+        {
+            break;
+        }
+    } //end for
+
+    action = (char *)"";  //目前还没有什么动作；
+
+    if (ngx_process == NGX_PROCESS_MASTER) {
+        switch (signo) {
+            case SIGCHLD:
+                ngx_reap = 1; //标记子进程状态变化，日后master主进程的for(;;)循环中可能会用到这个变量【比如重新产生一个子进程】
+                break;
+            default:
+                break;
+        }
+    } else if (ngx_process == NGX_PROCESS_WORKER) {
+
+    }
+
+    //这里记录一些日志信息
+    //siginfo这个
+    if(siginfo && siginfo->si_pid) { //si_pid = sending process ID【发送该信号的进程id】
+        ngx_log_error_core(NGX_LOG_NOTICE,0,"signal %d (%s) received from %P%s", signo, sig->signame, siginfo->si_pid, action);
+    } else {
+        ngx_log_error_core(NGX_LOG_NOTICE,0,"signal %d (%s) received %s",signo, sig->signame, action);//没有发送该信号的进程id，所以不显示发送该信号的进程id
+    }
+
+    //子进程状态有变化，通常是意外退出【既然官方是在这里处理，我们也学习官方在这里处理】
+    if (signo == SIGCHLD)  {
+        ngx_process_get_status(); //获取子进程的结束状态
+    } //end if
+
+    return ;
+}
+
+static void ngx_process_get_status() {
+    pid_t pid;
+    int status;
+    int err;
+    int one=0; //抄自官方nginx，应该是标记信号正常处理过一次
+
+    //当你杀死一个子进程时，父进程会收到这个SIGCHLD信号。
+    for (;;) {
+        //第一次waitpid返回一个> 0值，表示成功
+        //第二次再循环回来，再次调用waitpid会返回一个0(只有waitpid的第三个参数为WNOHANG时waitpid才会返回0)
+        //返回的0表示worker子进程并不是立即可用的，waitpid不阻塞，立即返回0.
+        waitpid(-1, &status, WNOHANG); //第一个参数为-1，表示等待任何子进程
+                                           //第二个参数：保存子进程的状态信息
+        if (pid == 0) {
+            return ;
+        }
+        if(pid == -1) {//这表示这个waitpid调用有错误，有错误也返回
+            //这里处理代码抄自官方nginx，主要目的是打印一些日志。考虑到这些代码也许比较成熟，所以，就基本保持原样照抄吧；
+            err = errno;
+            if(err == EINTR) {        //调用被某个信号中断
+                continue;
+            }
+
+            if(err == ECHILD  && one) { //没有子进程
+                return;
+            }
+
+            if (err == ECHILD) {       //没有子进程
+                ngx_log_error_core(NGX_LOG_INFO,err,"waitpid() failed!");
+                return;
+            }
+            ngx_log_error_core(NGX_LOG_ALERT,err,"waitpid() failed!");
+            return;
+        }
+
+        //走到这里，表示  成功【返回进程id】
+        one = 1;  //标记waitpid()返回了正常的返回值
+        if(WTERMSIG(status)) { //获取使子进程终止的信号编号
+            ngx_log_error_core(NGX_LOG_ALERT,0,"pid = %P exited on signal %d!",pid,WTERMSIG(status)); //获取使子进程终止的信号编号
+        } else {
+            ngx_log_error_core(NGX_LOG_NOTICE,0,"pid = %P exited with code %d!",pid,WEXITSTATUS(status)); //WEXITSTATUS()获取子进程传递给exit或者_exit参数的低八位
+        }
+        return ;
+    }
+    return ;
 }

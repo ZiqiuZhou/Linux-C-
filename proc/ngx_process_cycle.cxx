@@ -64,6 +64,7 @@ void ngx_master_process_cycle() {
             strcat(title,g_os_argv[i]);
         }//end for
         ngx_setproctitle(title); //设置标题
+        ngx_log_error_core(NGX_LOG_NOTICE,0,"%s %P 启动并开始运行......!",title,ngx_pid); //设置标题时顺便记录下来进程名，进程id等信息到日志
     }
     //首先我设置主进程标题---------end
 
@@ -82,7 +83,8 @@ void ngx_master_process_cycle() {
 //        //b)此时，一旦收到信号，便恢复原先的信号屏蔽【我们原来的mask在上边设置的，阻塞了多达10个信号】
 //        //c)调用该信号对应的信号处理函数
 //        //d)信号处理函数返回后，sigsuspend返回，使程序流程继续往下走
-//        sigsuspend(&set); //阻塞在这里，等待一个信号，此时进程是挂起的，不占用cpu时间，只有收到信号才会被唤醒（返回）；
+        sigsuspend(&set); //阻塞在这里，等待一个信号，此时进程是挂起的，不占用cpu时间，只有收到信号才会被唤醒（返回）；
+        sleep(1); //休息1秒
 //        printf("执行到sigsuspend()下边来了\n");
     }
     return;
@@ -131,12 +133,16 @@ static int ngx_spawn_process(int inum, const char* pprocname) {
 //     子进程分叉才会走到这里
 //inum：进程编号【0开始】
 static void ngx_worker_process_cycle(int inum,const char *pprocname) {
+    //设置一下变量
+    ngx_process = NGX_PROCESS_WORKER;  //设置进程的类型，是worker进程
+
     ngx_worker_process_init(inum);
     ngx_setproctitle(pprocname); //子进程设置进程名
+    ngx_log_error_core(NGX_LOG_NOTICE,0,"%s %P 启动并开始运行......!",pprocname,ngx_pid); //设置标题时顺便记录下来进程名，进程id等信息到日志
 
     //暂时先放个死循环，我们在这个循环里一直不出来
     for (;;) {
-        ngx_log_error_core(0,0,"good--这是子进程，编号为%d,pid为%P！",inum,ngx_pid);
+        sleep(1); //休息1秒
     }
     return ;
 }

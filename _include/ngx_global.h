@@ -6,18 +6,7 @@
 #include <cassert>
 #include <stdexcept>  // for runtime_error
 #include <string>
-
-//一些比较通用的定义放在这里
-
-
-//结构定义
-struct CConfItem
-{
-	std::string ItemName;
-	std::string ItemContent;
-
-	CConfItem(){}
-};
+#include <signal.h>
 
 //和运行日志相关
 struct ngx_log_t{
@@ -35,5 +24,6 @@ extern char        *gp_envmem;
 extern pid_t       ngx_pid;
 extern pid_t       ngx_parent;
 extern ngx_log_t   ngx_log;
-
+extern int           ngx_process;
+extern sig_atomic_t  ngx_reap;
 #endif

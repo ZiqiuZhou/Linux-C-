@@ -7,6 +7,14 @@
 
 #include "ngx_global.h"
 
+struct CConfItem
+{
+    std::string ItemName;
+    std::string ItemContent;
+
+    CConfItem(){}
+};
+
 struct FileDeleter
 {
     void operator ()(std::FILE* file) const noexcept
