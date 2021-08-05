@@ -13,6 +13,7 @@
 
 #include "ngx_func.h"
 #include "ngx_macro.h"
+#include "ngx_global.h"
 #include "ngx_c_conf.h"
 
 //函数声明
@@ -142,7 +143,7 @@ static void ngx_worker_process_cycle(int inum,const char *pprocname) {
 
     //暂时先放个死循环，我们在这个循环里一直不出来
     for (;;) {
-        sleep(1); //休息1秒
+        ngx_process_events_and_timers(); //处理网络事件和定时器事件
     }
     return ;
 }
@@ -158,7 +159,7 @@ static void ngx_worker_process_init(int inum) {
         ngx_log_error_core(NGX_LOG_ALERT,errno,"ngx_worker_process_init()中sigprocmask()失败!");
     }
 
-
+    g_socket.ngx_epoll_init(); //初始化epoll相关内容 epoll_create(), epoll_ctl()
     //....将来再扩充代码
     //....
     return;
