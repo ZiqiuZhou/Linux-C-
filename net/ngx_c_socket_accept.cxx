@@ -88,7 +88,7 @@ void CSocket::ngx_event_accept(std::shared_ptr<ngx_connection_poll>& conn) {
             //如果不是用accept4()取得的socket，那么就要设置为非阻塞【因为用accept4()的已经被accept4()设置为非阻塞了】
             if(setnonblocking(connfd) == false) {
                 //设置非阻塞居然失败
-                ngx_close_accepted_connection(new_conn); //回收连接池中的连接（千万不能忘记），并关闭socket
+                ngx_close_connection(new_conn); //回收连接池中的连接（千万不能忘记），并关闭socket
                 return; //直接返回
             }
         }
@@ -105,21 +105,11 @@ void CSocket::ngx_event_accept(std::shared_ptr<ngx_connection_poll>& conn) {
                                new_conn) == -1)   //连接池中的连接
         {
             //增加事件失败，失败日志在ngx_epoll_add_event中写过了，因此这里不多写啥；
-            ngx_close_accepted_connection(new_conn);//回收连接池中的连接（千万不能忘记），并关闭socket
+            ngx_close_connection(new_conn);//回收连接池中的连接（千万不能忘记），并关闭socket
             return; //直接返回
         }
 
         break;  //一般就是循环一次就跳出去
-    }
-
-}
-
-//用户连入，我们accept4()时，得到的socket在处理中产生失败，则资源用这个函数释放【因为这里涉及到好几个要释放的资源，所以写成函数】
-void CSocket::ngx_close_accepted_connection(std::shared_ptr<ngx_connection_poll>& conn) {
-    int fd = conn->connfd;
-    ngx_free_connection(conn);
-    if(close(fd) == -1) {
-        ngx_log_error_core(NGX_LOG_ALERT,errno,"CSocekt::ngx_close_accepted_connection()中close(%d)失败!",fd);
     }
     return ;
 }

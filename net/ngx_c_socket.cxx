@@ -21,17 +21,37 @@
 #include "ngx_global.h"
 #include "ngx_func.h"
 #include "ngx_c_socket.h"
+#include "ngx_c_memory.h"
 
 CSocket::CSocket() {
     //epoll相关
     m_epollhandle = -1;          //epoll返回的句柄
     p_free_connections.clear();
     m_ListenSocketList.clear();
+
+    //一些和网络通讯有关的常用变量值，供后续频繁使用时提高效率
+    m_iLenPkgHeader = sizeof(COMM_PKG_HEADER);    //包头的sizeof值【占用的字节数】
+    m_iLenMsgHeader = sizeof(STRUC_MSG_HEADER);  //消息头的sizeof值【占用的字节数】
 }
 
 CSocket::~CSocket() {
     p_free_connections.clear();
     m_ListenSocketList.clear();
+
+    clearMsgRecvQueue();
+}
+
+//清理接收消息队列，注意这个函数的写法。
+void CSocket::clearMsgRecvQueue()
+{
+    char * sTmpMempoint;
+    CMemory *p_memory = CMemory::GetInstance();
+
+    while(!m_MsgRecvQueue.empty()) {
+        sTmpMempoint = m_MsgRecvQueue.front();
+        m_MsgRecvQueue.pop_front();
+        p_memory->FreeMemory(sTmpMempoint);
+    }
 }
 
 //初始化函数【fork()子进程之前干这个事】
@@ -189,7 +209,7 @@ int CSocket::ngx_epoll_init() {
                                 1, 0, //读，写【只关心读事件，所以参数2：readevent=1,而参数3：writeevent=0】
                                 0, //其他补充标记
                                 EPOLL_CTL_ADD, //事件类型【增加，还有删除/修改】
-                                conn)) {
+                                conn) == -1) {
             exit(2);
         }
     }
@@ -207,7 +227,7 @@ int CSocket::ngx_epoll_init() {
 //返回值：成功返回1，失败返回-1；
 int CSocket::ngx_epoll_add_event(int sockfd, int readevent, int writeevent,
                         uint32_t otherflag, uint32_t eventtype,
-                        std::shared_ptr <ngx_connection_poll> &conn) {
+                        std::shared_ptr<ngx_connection_poll> &conn) {
     struct epoll_event event;
     memset(&event, 0, sizeof(epoll_event));
 
@@ -227,7 +247,6 @@ int CSocket::ngx_epoll_add_event(int sockfd, int readevent, int writeevent,
 
     if(epoll_ctl(m_epollhandle, eventtype, sockfd, &event) == -1) {
         ngx_log_stderr(errno,"CSocekt::ngx_epoll_add_event()中epoll_ctl(%d,%d,%d,%u,%u)失败.",sockfd,readevent,writeevent,otherflag,eventtype);
-        //exit(2); //这是致命问题了，直接退，资源由系统释放吧，这里不刻意释放了，比较麻烦，后来发现不能直接退；
         return -1;
     }
     return 1;

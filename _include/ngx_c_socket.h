@@ -7,9 +7,12 @@
 
 #include <vector>
 #include <forward_list>
+#include <list>
 #include <memory>
 #include <sys/epoll.h> //epoll
 #include <sys/socket.h>
+
+#include "ngx_comm.h"
 
 #define NGX_LISTEN_BACKLOG 511 // 已完成连接队列，nginx给511
 #define NGX_MX_EVENTS      512 // epoll_wait一次最多接收这么多个事件
@@ -39,6 +42,23 @@ struct ngx_connection_poll {
     uint8_t write_ready; //写准备好标记
     ngx_event_handler_pt read_handler; //读事件的相关处理方法
     ngx_event_handler_pt write_handler; //写事件的相关处理方法
+
+    //和收包有关
+    unsigned char curStat;                 //当前收包的状态
+    char  dataHeadInfo[_DATA_BUFSIZE_];   //用于保存收到的数据的包头信息
+    char  *precvbuf;                      //接收数据的缓冲区的头指针，对收到不全的包非常有用
+    unsigned int irecvlen;                //要收到多少数据，由这个变量指定，和precvbuf配套使用
+
+    bool ifnewrecvMem;                   //如果我们成功的收到了包头，那么我们就要分配内存开始保存 包头+消息头+包体内容，这个标记用来标记是否我们new过内存，因为new过是需要释放的
+    char *pnewMemPointer;                //new出来的用于收包的内存首地址，和ifnewrecvMem配对使用
+};
+
+//消息头，引入的目的是当收到数据包时，额外记录一些内容以备将来使用
+struct STRUC_MSG_HEADER
+{
+    std::shared_ptr<ngx_connection_poll> pConn; //记录对应的链接，注意这是个指针
+    uint64_t iCurrsequence; //收到数据包时记录对应连接的序号，将来能用于比较是否连接已经作废用
+    //......其他以后扩展
 };
 
 class CSocket {
@@ -66,7 +86,14 @@ private:
     //一些业务处理函数handler
     void ngx_event_accept(std::shared_ptr<ngx_connection_poll>& conn);
     void ngx_wait_request_handler(std::shared_ptr<ngx_connection_poll>& conn);
-    void ngx_close_accepted_connection(std::shared_ptr<ngx_connection_poll>& conn);
+    void ngx_close_connection(std::shared_ptr<ngx_connection_poll>& conn);
+
+    ssize_t recvproc(std::shared_ptr<ngx_connection_poll> &conn, char *buff, ssize_t buflen);  //接收从客户端来的数据专用函数
+    void ngx_wait_request_handler_proc_p1(std::shared_ptr<ngx_connection_poll> &conn);
+    void ngx_wait_request_handler_proc_plast(std::shared_ptr<ngx_connection_poll> &conn);
+    void inMsgRecvQueue(char *buf);                                    //收到一个完整消息后，入消息队列
+    void tmpoutMsgRecvQueue(); //临时清除对列中消息函数，测试用，将来会删除该函数
+    void clearMsgRecvQueue();
 
     //连接池 或 连接 相关
     std::shared_ptr<ngx_connection_poll> ngx_get_connection(int sockfd); //从连接池中获取一个空闲连接
@@ -78,11 +105,15 @@ private:
     int m_epollhandle;     //epoll_create返回的句柄
 
     int m_free_connection_n;
+    size_t  m_iLenPkgHeader; //sizeof(COMM_PKG_HEADER);
+    size_t  m_iLenMsgHeader; //sizeof(STRUC_MSG_HEADER);
+
     //和连接池有关的
     std::forward_list<std::shared_ptr<ngx_connection_poll> > p_free_connections; // free connection list
-
     std::vector<std::shared_ptr<ngx_listening_t> > m_ListenSocketList;  //监听套接字队列
     struct epoll_event m_events[NGX_MX_EVENTS]; // epoll_event
+    //消息队列
+    std::list<char *> m_MsgRecvQueue; //接收数据消息队列
 };
 
 #endif //LINUX_CPP_COMM_ARCHITECTURE_NGX_C_SOCKET_H

@@ -11,6 +11,7 @@
 #include "ngx_func.h"    //各种函数声明
 #include "ngx_macro.h"   //各种宏定义
 #include "ngx_c_socket.h"  //和socket通讯相关
+#include "ngx_c_memory.h"  //和内存分配释放等相关
 
 //本文件用的函数声明
 static void freeresource();
@@ -77,6 +78,9 @@ int main(int argc, char *const *argv)
         return exitcode;
     }
     //-------------------------------------------------------
+
+    //(2.1)内存单例类可以在这里初始化，返回值不用保存
+    CMemory::GetInstance();
 
     //(3)一些初始化函数，准备放这里-------------------------------
     ngx_log_init();             //日志初始化(创建/打开日志文件)
