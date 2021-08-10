@@ -6,12 +6,16 @@
 #include <unistd.h>
 #include <string.h>
 #include <signal.h>
+#include <errno.h>
+#include <arpa/inet.h>
 
 #include "ngx_c_conf.h"  //和配置文件处理相关的类,名字带c_表示和类有关
 #include "ngx_func.h"    //各种函数声明
 #include "ngx_macro.h"   //各种宏定义
 #include "ngx_c_socket.h"  //和socket通讯相关
 #include "ngx_c_memory.h"  //和内存分配释放等相关
+#include "ngx_c_threadpool.h"  //和多线程有关
+#include "ngx_c_crc32.h"       //和crc32校验算法有关
 
 //本文件用的函数声明
 static void freeresource();
@@ -26,7 +30,8 @@ size_t  g_envneedmem = 0;    //环境变量所占内存大小
 int     g_daemonized = 0;    //守护进程标记，标记是否启用了守护进程模式，0：未启用，1：启用了
 
 //socket相关
-CSocket g_socket;               //socket全局对象
+CLogicSocket g_socket;               //socket全局对象
+CThreadPool g_threadpool;      //线程池全局对象
 
 //和进程本身有关的全局量
 pid_t   ngx_pid;             //当前进程的pid
@@ -81,6 +86,8 @@ int main(int argc, char *const *argv)
 
     //(2.1)内存单例类可以在这里初始化，返回值不用保存
     CMemory::GetInstance();
+    //(2.2)crc32校验算法单例类可以在这里初始化，返回值不用保存
+    CCRC32::GetInstance();
 
     //(3)一些初始化函数，准备放这里-------------------------------
     ngx_log_init();             //日志初始化(创建/打开日志文件)

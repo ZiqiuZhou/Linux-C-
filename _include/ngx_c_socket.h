@@ -9,6 +9,7 @@
 #include <forward_list>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <sys/epoll.h> //epoll
 #include <sys/socket.h>
 
@@ -65,8 +66,8 @@ class CSocket {
 public:
     CSocket();
     virtual ~CSocket();
-
     virtual bool Initialize(); //初始化函数
+    virtual void threadRecvProcFunc(char *pMsgBuf);
 
 public:
     int ngx_epoll_init();
@@ -91,9 +92,6 @@ private:
     ssize_t recvproc(std::shared_ptr<ngx_connection_poll> &conn, char *buff, ssize_t buflen);  //接收从客户端来的数据专用函数
     void ngx_wait_request_handler_proc_p1(std::shared_ptr<ngx_connection_poll> &conn);
     void ngx_wait_request_handler_proc_plast(std::shared_ptr<ngx_connection_poll> &conn);
-    void inMsgRecvQueue(char *buf);                                    //收到一个完整消息后，入消息队列
-    void tmpoutMsgRecvQueue(); //临时清除对列中消息函数，测试用，将来会删除该函数
-    void clearMsgRecvQueue();
 
     //连接池 或 连接 相关
     std::shared_ptr<ngx_connection_poll> ngx_get_connection(int sockfd); //从连接池中获取一个空闲连接
@@ -112,8 +110,9 @@ private:
     std::forward_list<std::shared_ptr<ngx_connection_poll> > p_free_connections; // free connection list
     std::vector<std::shared_ptr<ngx_listening_t> > m_ListenSocketList;  //监听套接字队列
     struct epoll_event m_events[NGX_MX_EVENTS]; // epoll_event
-    //消息队列
-    std::list<char *> m_MsgRecvQueue; //接收数据消息队列
+
+    //多线程相关
+    std::mutex m_recvMessageQueueMutex;
 };
 
 #endif //LINUX_CPP_COMM_ARCHITECTURE_NGX_C_SOCKET_H

@@ -37,21 +37,6 @@ CSocket::CSocket() {
 CSocket::~CSocket() {
     p_free_connections.clear();
     m_ListenSocketList.clear();
-
-    clearMsgRecvQueue();
-}
-
-//清理接收消息队列，注意这个函数的写法。
-void CSocket::clearMsgRecvQueue()
-{
-    char * sTmpMempoint;
-    CMemory *p_memory = CMemory::GetInstance();
-
-    while(!m_MsgRecvQueue.empty()) {
-        sTmpMempoint = m_MsgRecvQueue.front();
-        m_MsgRecvQueue.pop_front();
-        p_memory->FreeMemory(sTmpMempoint);
-    }
 }
 
 //初始化函数【fork()子进程之前干这个事】

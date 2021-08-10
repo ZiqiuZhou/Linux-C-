@@ -8,6 +8,7 @@
 #include <string>
 #include <signal.h>
 #include "ngx_c_socket.h"
+#include "ngx_c_threadpool.h"
 
 //和运行日志相关
 struct ngx_log_t{
@@ -22,7 +23,8 @@ extern int         g_os_argc;
 extern char        **g_os_argv;
 extern char        *gp_envmem;
 extern int         g_daemonized;
-extern CSocket     g_socket;
+extern CLogicSocket     g_socket;
+extern CThreadPool   g_threadpool;
 
 extern pid_t         ngx_pid;
 extern pid_t         ngx_parent;

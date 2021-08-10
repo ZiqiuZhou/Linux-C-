@@ -13,6 +13,7 @@
 #include <errno.h>     //errno
 #include <sys/ioctl.h> //ioctl
 #include <arpa/inet.h>
+#include <thread>
 
 #include "ngx_c_conf.h"
 #include "ngx_macro.h"
@@ -154,7 +155,8 @@ void CSocket::ngx_wait_request_handler_proc_p1(std::shared_ptr<ngx_connection_po
 
 void CSocket::ngx_wait_request_handler_proc_plast(std::shared_ptr<ngx_connection_poll> &conn) {
     //把这段内存放到消息队列中来；
-    inMsgRecvQueue(conn->pnewMemPointer);
+    int irmqc = 0;  //消息队列当前信息数量
+    g_threadpool.inMsgRecvQueueAndSignal(conn->pnewMemPointer); //入消息队列并触发线程处理消息
 
     conn->ifnewrecvMem    = false;            //内存不再需要释放，因为你收完整了包，这个包被上边调用inMsgRecvQueue()移入消息队列，那么释放内存就属于业务逻辑去干，不需要回收连接到连接池中干了
     conn->pnewMemPointer  = nullptr;
@@ -164,29 +166,6 @@ void CSocket::ngx_wait_request_handler_proc_plast(std::shared_ptr<ngx_connection
     return;
 }
 
-//当收到一个完整包之后，将完整包入消息队列，这个包在服务器端应该是 消息头+包头+包体 格式
-void CSocket::inMsgRecvQueue(char *buf) {
-    m_MsgRecvQueue.emplace_back(std::move(buf));
-    tmpoutMsgRecvQueue();
-    return ;
-}
-
-//临时函数，用于将Msg中消息干掉
-void CSocket::tmpoutMsgRecvQueue() {
-    if(m_MsgRecvQueue.empty()) {
-        return;
-    }
-    int size = m_MsgRecvQueue.size();
-    if(size < 1000) {
-        return;
-    }
-    //消息达到1000条
-    CMemory *p_memory = CMemory::GetInstance();
-    int cha = size - 500;
-    for(int i = 0; i < cha; ++i) {
-        char *sTmpMsgBuf = m_MsgRecvQueue.front();//返回第一个元素但不检查元素存在与否
-        m_MsgRecvQueue.pop_front();               //移除第一个元素但不返回
-        p_memory->FreeMemory(sTmpMsgBuf);         //先释放掉把；
-    }
+void CSocekt::threadRecvProcFunc(char *pMsgBuf) {
     return;
 }

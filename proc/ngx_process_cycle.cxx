@@ -93,10 +93,10 @@ void ngx_master_process_cycle() {
 
 //描述：根据给定的参数创建指定数量的子进程，因为以后可能要扩展功能，增加参数，所以单独写成一个函数
 //threadnums:要创建的子进程数量
-static void ngx_start_worker_processes(int threadnums)
+static void ngx_start_worker_processes(int processNums)
 {
     int i;
-    for (i = 0; i < threadnums; i++)  //master进程在走这个循环，来创建若干个子进程
+    for (i = 0; i < processNums; i++)  //master进程在走这个循环，来创建若干个子进程
     {
         ngx_spawn_process(i,"worker process");
     } //end for
@@ -145,6 +145,8 @@ static void ngx_worker_process_cycle(int inum,const char *pprocname) {
     for (;;) {
         ngx_process_events_and_timers(); //处理网络事件和定时器事件
     }
+    //如果从这个循环跳出来，考虑在这里停止线程池；
+    g_threadpool.StopAll();
     return ;
 }
 
@@ -159,8 +161,17 @@ static void ngx_worker_process_init(int inum) {
         ngx_log_error_core(NGX_LOG_ALERT,errno,"ngx_worker_process_init()中sigprocmask()失败!");
     }
 
+    //线程池代码，率先创建，至少要比和socket相关的内容优先
+    CConfig *p_config = CConfig::GetInstance();
+    int tmpthreadnums = p_config->GetIntDefault("ProcMsgRecvWorkThreadCount",5); //处理接收到的消息的线程池中线程数量
+    if(g_threadpool.Create(tmpthreadnums) == false)  //创建线程池中线程
+    {
+        //内存没释放，但是简单粗暴退出；
+        exit(-2);
+    }
+    sleep(1);
+
     g_socket.ngx_epoll_init(); //初始化epoll相关内容 epoll_create(), epoll_ctl()
-    //....将来再扩充代码
-    //....
+
     return;
 }
