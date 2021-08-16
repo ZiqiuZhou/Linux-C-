@@ -8,6 +8,7 @@
 #include <string>
 #include <signal.h>
 #include "ngx_c_socket.h"
+#include "ngx_c_slogic.h"
 #include "ngx_c_threadpool.h"
 
 //和运行日志相关
@@ -31,4 +32,5 @@ extern pid_t         ngx_parent;
 extern ngx_log_t     ngx_log;
 extern int           ngx_process;
 extern sig_atomic_t  ngx_reap;
+extern int           g_stopEvent;
 #endif

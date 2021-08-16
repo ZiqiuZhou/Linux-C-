@@ -23,7 +23,7 @@
 #include "ngx_c_memory.h"
 
 //来数据时候的处理，当连接上有数据来的时候，本函数会被ngx_epoll_process_events()所调用  ,官方的类似函数为ngx_http_wait_request_handler();
-void CSocket::ngx_wait_request_handler(std::shared_ptr<ngx_connection_poll>& conn) {
+void CSocket::ngx_read_request_handler(std::shared_ptr<ngx_connection_poll>& conn) {
     ssize_t reco = recvproc(conn, conn->precvbuf, conn->irecvlen);
     if (reco < 0) {
         return ;
@@ -81,7 +81,7 @@ ssize_t CSocket::recvproc(std::shared_ptr <ngx_connection_poll> &conn, char *buf
     if (n == 0) {
         //客户端关闭【应该是正常完成了4次挥手】
         ngx_log_stderr(0,"连接被客户端正常关闭[4路挥手关闭]！");
-        ngx_close_connection(conn);
+        inRecyConnectQueue(conn);
         return -1;
     }
     // 有错误发生
@@ -104,8 +104,11 @@ ssize_t CSocket::recvproc(std::shared_ptr <ngx_connection_poll> &conn, char *buf
             ngx_log_stderr(errno,"CSocekt::recvproc()中发生错误，我打印出来看看是啥错误！");  //正式运营时可以考虑这些日志打印去掉
         }
 
-        ngx_close_connection(conn);
-        return -1;
+        if(close(conn->connfd) == -1)
+        {
+            ngx_log_error_core(NGX_LOG_ALERT,errno,"CSocekt::recvproc()中close_2(%d)失败!",conn->connfd);
+        }
+        inRecyConnectQueue(conn);
     }
 
     return n;
@@ -131,8 +134,7 @@ void CSocket::ngx_wait_request_handler_proc_p1(std::shared_ptr<ngx_connection_po
         conn->irecvlen = m_iLenPkgHeader;
     } else { //合法的包头
         char *pTmpBuffer  = (char *)p_memory->AllocMemory(m_iLenMsgHeader + e_pkgLen,false); //分配内存【长度是 消息头长度  + 包头长度 + 包体长度】，最后参数先给false，表示内存不需要memset;
-        conn->ifnewrecvMem   = true;        //标记我们new了内存，将来在ngx_free_connection()要回收的
-        conn->pnewMemPointer = pTmpBuffer;  //内存开始指针
+        conn->precvMemPointer = pTmpBuffer;  //内存开始指针
 
         //a)先填写消息头内容
         STRUC_MSG_HEADER* ptmpMsgHeader = (STRUC_MSG_HEADER*)pTmpBuffer;
@@ -156,16 +158,15 @@ void CSocket::ngx_wait_request_handler_proc_p1(std::shared_ptr<ngx_connection_po
 void CSocket::ngx_wait_request_handler_proc_plast(std::shared_ptr<ngx_connection_poll> &conn) {
     //把这段内存放到消息队列中来；
     int irmqc = 0;  //消息队列当前信息数量
-    g_threadpool.inMsgRecvQueueAndSignal(conn->pnewMemPointer); //入消息队列并触发线程处理消息
+    g_threadpool.inMsgRecvQueueAndSignal(conn->precvMemPointer); //入消息队列并触发线程处理消息
 
-    conn->ifnewrecvMem    = false;            //内存不再需要释放，因为你收完整了包，这个包被上边调用inMsgRecvQueue()移入消息队列，那么释放内存就属于业务逻辑去干，不需要回收连接到连接池中干了
-    conn->pnewMemPointer  = nullptr;
+    conn->precvMemPointer  = nullptr;
     conn->curStat         = _PKG_HD_INIT;     //收包状态机的状态恢复为原始态，为收下一个包做准备
     conn->precvbuf        = conn->dataHeadInfo;  //设置好收包的位置
     conn->irecvlen        = m_iLenPkgHeader;  //设置好要接收数据的大小
     return;
 }
 
-void CSocekt::threadRecvProcFunc(char *pMsgBuf) {
+void CSocket::threadRecvProcFunc(char *pMsgBuf) {
     return;
 }

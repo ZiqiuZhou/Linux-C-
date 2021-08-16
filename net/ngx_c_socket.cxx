@@ -15,6 +15,8 @@
 #include <sys/socket.h>
 #include <sys/ioctl.h> //ioctl
 #include <arpa/inet.h>
+#include <thread>
+#include <mutex>
 
 #include "ngx_c_conf.h"
 #include "ngx_macro.h"
@@ -23,19 +25,24 @@
 #include "ngx_c_socket.h"
 #include "ngx_c_memory.h"
 
+std::mutex CSocket::m_connectionMutex;  //连接相关互斥量，互斥m_freeconnectionList，m_connectionList
+std::mutex CSocket::m_recyconnqueueMutex;
+std::mutex CSocket::m_sendMessageQueueMutex;
+
 CSocket::CSocket() {
     //epoll相关
     m_epollhandle = -1;          //epoll返回的句柄
-    p_free_connections.clear();
-    m_ListenSocketList.clear();
 
     //一些和网络通讯有关的常用变量值，供后续频繁使用时提高效率
     m_iLenPkgHeader = sizeof(COMM_PKG_HEADER);    //包头的sizeof值【占用的字节数】
     m_iLenMsgHeader = sizeof(STRUC_MSG_HEADER);  //消息头的sizeof值【占用的字节数】
+
+    //各种队列相关
+    m_iSendMsgQueueCount = 0;     //发消息队列大小
+    m_totol_recyconnection_n = 0; //待释放连接队列大小
 }
 
 CSocket::~CSocket() {
-    p_free_connections.clear();
     m_ListenSocketList.clear();
 }
 
@@ -47,6 +54,49 @@ bool CSocket::Initialize() {
     return reco;
 }
 
+bool CSocket::Initialize_subproc() {
+    //第二个参数=0，表示信号量在线程之间共享，确实如此 ，如果非0，表示在进程之间共享
+    //第三个参数=0，表示信号量的初始值，为0时，调用sem_wait()就会卡在那里卡着
+    if(sem_init(&m_semEventSendQueue, 0, 0) == -1) {
+        ngx_log_stderr(0,"CSocket::Initialize()中sem_init(&m_semEventSendQueue,0,0)失败.");
+        return false;
+    }
+
+    //创建线程
+    std::shared_ptr<ThreadItem> pSendQueue(new ThreadItem(this)); //专门用来发送数据的线程
+    pSendQueue->_Handle = std::thread(ServerSendQueueThread, std::ref(pSendQueue));
+    m_threadVector.emplace_back(std::move(pSendQueue));
+
+    //创建线程
+    std::shared_ptr<ThreadItem> pRecyconn(new ThreadItem(this)); //专门用来回收连接的线程
+    pRecyconn->_Handle = std::thread(ServerRecyConnectionThread, std::ref(pRecyconn));
+    m_threadVector.emplace_back(std::move(pRecyconn));
+
+    return true;
+}
+
+// 把干活的线程停止掉
+void CSocket::Shutdown_subproc() {
+    if(sem_post(&m_semEventSendQueue)==-1)  //让ServerSendQueueThread()流程走下来干活
+    {
+        ngx_log_stderr(0,"CSocekt::Shutdown_subproc()中sem_post(&m_semEventSendQueue)失败.");
+    }
+
+    auto iter = m_threadVector.begin();
+    for(; iter != m_threadVector.end(); iter++)
+    {
+        ((*iter)->_Handle).join();
+    }
+    m_threadVector.clear();
+
+    //(3)队列相关
+    clearMsgSendQueue();
+    clearConnection();
+
+    //(4)多线程相关
+    sem_destroy(&m_semEventSendQueue);                  //发消息相关线程信号量释放
+}
+
 //专门用于读各种配置项
 void CSocket::ReadConf() {
     CConfig *p_config = CConfig::GetInstance();
@@ -54,7 +104,22 @@ void CSocket::ReadConf() {
     m_ListenPortCount = p_config->GetIntDefault("ListenPortCount", 1);
     //epoll连接的最大项数
     m_worker_connections = p_config->GetIntDefault("worker_connections", 512);
+    //等待这么些秒后才回收连接
+    m_RecyConnectionWaitTime = p_config->GetIntDefault("Sock_RecyConnectionWaitTime", 60);
     return ;
+}
+
+//清理TCP发送消息队列
+void CSocket::clearMsgSendQueue() {
+    char * sTmpMempoint;
+    CMemory *p_memory = CMemory::GetInstance();
+
+    while(!m_MsgSendQueue.empty())
+    {
+        sTmpMempoint = m_MsgSendQueue.front();
+        m_MsgSendQueue.pop_front();
+        p_memory->FreeMemory(sTmpMempoint);
+    }
 }
 
 //监听端口【支持多个端口】，这里遵从nginx的函数命名
@@ -150,6 +215,20 @@ void CSocket::ngx_close_listening_sockets() {
     return ;
 }
 
+//将一个待发送消息入到发消息队列中
+void CSocket::msgSend(char *psendbuf) {
+    std::unique_lock<std::mutex> u_lock(m_sendMessageQueueMutex);
+    m_MsgSendQueue.emplaec_back(psendbuf);
+
+    ++m_iSendMsgQueueCount;   //原子操作
+    //将信号量的值+1,这样其他卡在sem_wait的就可以走下去
+    if(sem_post(&m_semEventSendQueue)==-1)  //让ServerSendQueueThread()流程走下来干活
+    {
+        ngx_log_stderr(0,"CSocekt::msgSend()中sem_post(&m_semEventSendQueue)失败.");
+    }
+    return;
+}
+
 //(1)epoll功能初始化，子进程中进行 ，本函数被ngx_worker_process_init()所调用
 int CSocket::ngx_epoll_init() {
     //创建一个epoll对象，创建了一个红黑树，还创建了一个双向链表
@@ -161,15 +240,7 @@ int CSocket::ngx_epoll_init() {
     }
 
     // (2) 创建连接池list
-    m_free_connection_n = m_worker_connections; //记录当前连接池中连接总数
-    for (int i = 0; i < m_free_connection_n; ++i) {
-        auto ngx_connection_poll_ptr = std::make_shared<ngx_connection_poll>();
-        ngx_connection_poll_ptr->connfd = -1;
-        ngx_connection_poll_ptr->instance = 1;
-        ngx_connection_poll_ptr->iCurrsequence = 0;
-
-        p_free_connections.emplace_front(std::move(ngx_connection_poll_ptr));
-    }
+    initConnection();
 
     // (3) 遍历所有监听socket【监听端口】，为每个监听socket增加一个连接池中的连接
     auto pos = m_ListenSocketList.begin();
@@ -190,10 +261,10 @@ int CSocket::ngx_epoll_init() {
         conn->read_handler = &CSocket::ngx_event_accept;
 
         //往监听socket上增加监听事件
-        if (ngx_epoll_add_event((*pos)->sockfd, //监听socekt句柄
-                                1, 0, //读，写【只关心读事件，所以参数2：readevent=1,而参数3：writeevent=0】
-                                0, //其他补充标记
-                                EPOLL_CTL_ADD, //事件类型【增加，还有删除/修改】
+        if (ngx_epoll_oper_event((*pos)->sockfd, //监听socekt句柄
+                                EPOLL_CTL_ADD, //读，写【只关心读事件，所以参数2：readevent=1,而参数3：writeevent=0】
+                                EPOLLIN|EPOLLRDHUP, //其他补充标记
+                                0, //事件类型【增加，还有删除/修改】
                                 conn) == -1) {
             exit(2);
         }
@@ -210,28 +281,48 @@ int CSocket::ngx_epoll_init() {
 //eventtype：事件类型，一般就是用系统的枚举值，增加，删除，修改等;
 //conn：对应的连接池中的连接的指针
 //返回值：成功返回1，失败返回-1；
-int CSocket::ngx_epoll_add_event(int sockfd, int readevent, int writeevent,
-                        uint32_t otherflag, uint32_t eventtype,
-                        std::shared_ptr<ngx_connection_poll> &conn) {
-    struct epoll_event event;
-    memset(&event, 0, sizeof(epoll_event));
+int CSocket::ngx_epoll_oper_event(
+        int fd,               //句柄，一个socket
+        uint32_t eventtype,        //事件类型，一般是EPOLL_CTL_ADD，EPOLL_CTL_MOD，EPOLL_CTL_DEL ，说白了就是操作epoll红黑树的节点(增加，修改，删除)
+        uint32_t flag,             //标志，具体含义取决于eventtype
+        int bcaction,         //补充动作，用于补充flag标记的不足  :  0：增加   1：去掉 2：完全覆盖 ,eventtype是EPOLL_CTL_MOD时这个参数就有用
+        std::shared_ptr <ngx_connection_poll>& pConn             //pConn：一个指针【其实是一个连接】，EPOLL_CTL_ADD时增加到红黑树中去，将来epoll_wait时能取出来用
+)
+{
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(ev));
 
-    if (readevent == 0) {
-        event.events = EPOLLIN | EPOLLRDHUP; //EPOLLIN读事件，也就是read ready【客户端三次握手连接进来，也属于一种可读事件】 EPOLLRDHUP 客户端关闭连接，断连
+    if(eventtype == EPOLL_CTL_ADD) {//往红黑树中增加节点；
+        //红黑树从无到有增加节点
+        //ev.data.ptr = (void *)pConn;
+        ev.events = flag;      //既然是增加节点，则不管原来是啥标记
+        pConn->events = flag;  //这个连接本身也记录这个标记
+    } else if(eventtype == EPOLL_CTL_MOD) {
+        //节点已经在红黑树中，修改节点的事件信息
+        ev.events = pConn->events;  //先把标记恢复回来
+        if(bcaction == 0) {
+            //增加某个标记
+            ev.events |= flag;
+        } else if(bcaction == 1) {
+            //去掉某个标记
+            ev.events &= ~flag;
+        } else {
+            //完全覆盖某个标记
+            ev.events = flag;      //完全覆盖
+        }
+        pConn->events = ev.events; //记录该标记
     } else {
-        //其他事件类型待处理
-        //.....
+        //删除红黑树中节点，目前没这个需求【socket关闭这项会自动从红黑树移除】，所以将来再扩展
+        return  1;  //先直接返回1表示成功
     }
 
-    if(otherflag != 0)
-    {
-        event.events |= otherflag;
-    }
+    //原来的理解中，绑定ptr这个事，只在EPOLL_CTL_ADD的时候做一次即可，但是发现EPOLL_CTL_MOD似乎会破坏掉.data.ptr，因此不管是EPOLL_CTL_ADD，还是EPOLL_CTL_MOD，都给进去
+    //找了下内核源码SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,		struct epoll_event __user *, event)，感觉真的会覆盖掉：
+    //copy_from_user(&epds, event, sizeof(struct epoll_event)))，感觉这个内核处理这个事情太粗暴了
+    ev.data.ptr = (void *)pConn.get();
 
-    event.data.ptr = (void *)( (uintptr_t)(conn.get()) | conn->instance);
-
-    if(epoll_ctl(m_epollhandle, eventtype, sockfd, &event) == -1) {
-        ngx_log_stderr(errno,"CSocekt::ngx_epoll_add_event()中epoll_ctl(%d,%d,%d,%u,%u)失败.",sockfd,readevent,writeevent,otherflag,eventtype);
+    if(epoll_ctl(m_epollhandle, eventtype, fd, &ev) == -1) {
+        ngx_log_stderr(errno,"CSocekt::ngx_epoll_oper_event()中epoll_ctl(%d,%ud,%ud,%d)失败.",fd,eventtype,flag,bcaction);
         return -1;
     }
     return 1;
@@ -270,26 +361,14 @@ int CSocket::ngx_epoll_process_events(int timer) {
     }
 
     //走到这里，就是属于有事件收到了
-    uintptr_t instance;
     uint32_t revents;
     //遍历本次epoll_wait返回的所有事件
     for (int i = 0; i < events; ++i) {
-        ngx_connection_poll* raw_ptr = new ngx_connection_poll();
+        ngx_connection_poll* raw_ptr = new ngx_connection_poll;
         raw_ptr = (ngx_connection_poll*)(m_events[i].data.ptr);
-        instance = (uintptr_t) raw_ptr & 1;
         raw_ptr = (ngx_connection_poll*) ((uintptr_t)raw_ptr & (uintptr_t) ~1);
         std::shared_ptr<ngx_connection_poll> conn(std::move(raw_ptr));
         delete raw_ptr;
-
-        if (conn->connfd == -1) {
-            //过来的事件对应一个之前被关闭的连接,属于过期事件，不该处理
-            ngx_log_error_core(NGX_LOG_DEBUG,0,"CSocekt::ngx_epoll_process_events()中遇到了fd=-1的过期事件:%p.",conn);
-            continue;
-        }
-        if (conn->instance != instance) {
-            ngx_log_error_core(NGX_LOG_DEBUG,0,"CSocekt::ngx_epoll_process_events()中遇到了instance值改变的过期事件:%p.",conn);
-            continue; //这种事件就不处理即可
-        }
 
         // 正常开始处理
         revents = m_events[i].events;//取出事件类型
@@ -302,8 +381,25 @@ int CSocket::ngx_epoll_process_events(int timer) {
             (this->* (conn->read_handler) )(conn); // 新连接进入，这里执行的应该是CSocket::ngx_event_accept(conn)
         }
         if (revents & EPOLLOUT) { // 写事件
-
+            if(revents & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+                --conn->iThrowsendCount;
+            } else {
+                (this->* (conn->write_handler) )(conn);
+            }
         }
     }
     return 1;
+}
+
+void* CSocket::ServerSendQueueThread(std::shared_ptr<ThreadItem>& threadData) {
+    CSocekt *pSocketObj = pThread->_pThis;
+
+    char *pMsgBuf;
+    STRUC_MSG_HEADER*	pMsgHeader;
+    COMM_PKG_HEADER*    pPkgHeader;
+    lpngx_connection_t  p_Conn;
+    unsigned short      itmp;
+    ssize_t             sendsize;
+
+    CMemory *p_memory = CMemory::GetInstance();
 }

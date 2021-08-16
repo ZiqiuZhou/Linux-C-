@@ -147,6 +147,7 @@ static void ngx_worker_process_cycle(int inum,const char *pprocname) {
     }
     //如果从这个循环跳出来，考虑在这里停止线程池；
     g_threadpool.StopAll();
+    g_socket.Shutdown_subproc();
     return ;
 }
 
@@ -170,6 +171,12 @@ static void ngx_worker_process_init(int inum) {
         exit(-2);
     }
     sleep(1);
+
+    if(g_socket.Initialize_subproc() == false) //初始化子进程需要具备的一些多线程能力相关的信息
+    {
+        //内存没释放，但是简单粗暴退出；
+        exit(-2);
+    }
 
     g_socket.ngx_epoll_init(); //初始化epoll相关内容 epoll_create(), epoll_ctl()
 

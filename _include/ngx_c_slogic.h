@@ -15,10 +15,13 @@ public:
     virtual bool Initialize();
 
 public:
-    bool _HandleRegister(std::shared_ptr <ngx_connection_poll> pConn, LPSTRUC_MSG_HEADER pMsgHeader, char *pPkgBody,
+    bool _HandleRegister(std::shared_ptr <ngx_connection_poll> pConn, STRUC_MSG_HEADER* pMsgHeader, char *pPkgBody,
                          unsigned short iBodyLength);
 
-    bool _HandleLogIn(std::shared_ptr <ngx_connection_poll> pConn, LPSTRUC_MSG_HEADER pMsgHeader, char *pPkgBody,
+    bool _HandleLogIn(std::shared_ptr <ngx_connection_poll> pConn, STRUC_MSG_HEADER* pMsgHeader, char *pPkgBody,
                       unsigned short iBodyLength);
+
+public:
+    virtual void threadRecvProcFunc(char *pMsgBuf);
 };
 #endif //LINUX_CPP_COMM_ARCHITECTURE_NGX_C_SLOGIC_H

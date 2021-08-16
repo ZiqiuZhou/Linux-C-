@@ -94,15 +94,16 @@ void CSocket::ngx_event_accept(std::shared_ptr<ngx_connection_poll>& conn) {
         }
 
         new_conn->listening = conn->listening; //连接对象和监听对象关联，方便通过连接对象找监听对象【关联到监听端口】
-        new_conn->write_ready = 1; //标记可以写，新连接写事件肯定是ready的；【从连接池拿出一个连接时这个连接的所有成员都是0】
-        new_conn->read_handler = &CSocket::ngx_wait_request_handler;  //设置数据来时的读处理函数
+
+        new_conn->read_handler = &CSocket::ngx_read_request_handler;  //设置数据来时的读处理函数
+        new_conn->write_handler = &CSocket::ngx_write_request_handler;
 
         //客户端应该主动发送第一次的数据，这里将读事件加入epoll监控
-        if(ngx_epoll_add_event(connfd,                 //socket句柄
-                               1, 0,              //读，写 ,这里读为1，表示客户端应该主动给我服务器发送消息，我服务器需要首先收到客户端的消息；
-                               EPOLLET,          //其他补充标记【EPOLLET(高速模式，边缘触发ET)】
-                               EPOLL_CTL_ADD,    //事件类型【增加，还有删除/修改】
-                               new_conn) == -1)   //连接池中的连接
+        if (ngx_epoll_oper_event(connfd,                 //socket句柄
+                                 EPOLL_CTL_ADD,              //读，写 ,这里读为1，表示客户端应该主动给我服务器发送消息，我服务器需要首先收到客户端的消息；
+                                 EPOLLIN | EPOLLRDHUP,          //其他补充标记【EPOLLET(高速模式，边缘触发ET)】
+                                 0,    //事件类型【增加，还有删除/修改】
+                                 new_conn) == -1)   //连接池中的连接
         {
             //增加事件失败，失败日志在ngx_epoll_add_event中写过了，因此这里不多写啥；
             ngx_close_connection(new_conn);//回收连接池中的连接（千万不能忘记），并关闭socket
